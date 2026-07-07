@@ -795,6 +795,7 @@ async function resolveOrg(){
       ${renewals.length?`<div class="sec-title">\u23F0 Renewals coming up</div>
       <div class="card">${renewals.sort((a,b)=>a.renewal.localeCompare(b.renewal)).map(p=>`<div class="pay-line"><span><b>${esc(p.client)}</b></span><span class="mono" style="color:var(--accent-ink);">${esc(p.renewal)}</span></div>`).join('')}</div>`:''}
       <div class="sec-title">Your clients (${book.length}) — tap to update</div>
+      ${book.length>1?searchBox('rmcli-search','Search your clients by name…'):''}
       ${book.length===0?'<div class="empty"><div class="disp">No active clients yet</div>Your won clients appear here once they\'re on the book.</div>':
         book.map(p=>{
           const acts=(p.activity||[]).slice().sort((a,b)=>b.at.localeCompare(a.at));
@@ -820,6 +821,7 @@ async function resolveOrg(){
   function wireRmClients(slug){
     document.querySelectorAll('[data-cliedit]').forEach(b=>b.onclick=e=>{e.stopPropagation();openClientEdit(slug,b.dataset.cliedit);});
     document.querySelectorAll('.client-card').forEach(c=>c.onclick=()=>openClientEdit(slug,c.dataset.cli));
+    wireSearch('rmcli-search','.client-card');
   }
   function openClientEdit(slug,id){
     const p=(S.portfolio[slug]||[]).find(x=>x.id===id);
@@ -911,7 +913,7 @@ async function resolveOrg(){
         <div style="font-weight:700;font-size:13.5px;">⏱ ${stale.length} deal${stale.length===1?'':'s'} gone quiet</div>
         <div style="font-size:12.5px;color:var(--ink);margin-top:3px;line-height:1.5;">These haven't moved in ${STALE_DAYS}+ days and are showing as stale to Bernard and Brendan. Tap each one and log where it's at — even "still waiting on docs" keeps it green. A quick daily update is all it takes.</div></div>`:''}
       ${(!S.showArch&&!stale.length&&active.length)?`<div class="note" style="margin-bottom:12px;">Your pipeline's up to date — nice. Log a quick update whenever a deal moves so Bernard and Brendan always see the real picture.</div>`:''}
-      ${(list.length>3)?`<div class="field" style="margin-bottom:10px;"><input id="pipe-search" placeholder="\u{1F50D} Search by name, industry or next step…" autocomplete="off"></div>`:''}
+      ${(list.length>1)?`<div class="field" style="margin-bottom:10px;"><input id="pipe-search" placeholder="\u{1F50D} Search by name, industry or next step…" autocomplete="off"></div>`:''}
       <div class="sec-title">${S.showArch?'Archived':'Active'} deals (<span id="pipe-count">${list.length}</span>)</div>
       ${list.length===0?`<div class="empty"><div class="disp">${S.showArch?'Nothing archived':'No deals yet'}</div><div>${S.showArch?'':'Tap + to add your first prospect.'}</div></div>`:list.map(d=>dealCard(slug,d,true)).join('')}
       <div id="pipe-nomatch" class="empty" style="display:none;"><div class="disp">No matches</div><div>No leads match your search.</div></div>
@@ -964,6 +966,26 @@ async function resolveOrg(){
   // "Not successful" — open the reason capture for a deal.
   function wireLostButtons(slug){
     document.querySelectorAll('[data-lost]').forEach(b=>b.onclick=()=>{S.lostModal={slug,id:b.dataset.lost};render();});
+  }
+  // ---------- Generic search (rows/cards) — used across the list-heavy views ----------
+  function searchBox(id, placeholder){
+    return `<div class="field" style="margin:0 0 10px;"><input id="${id}" placeholder="\u{1F50D} ${esc(placeholder)}" autocomplete="off"></div>`;
+  }
+  // Filters items by visible text; also collapses a stage/section card (and its
+  // heading) when a search empties it, so grouped views stay tidy.
+  function wireSearch(inputId, itemSelector){
+    const inp=document.getElementById(inputId); if(!inp)return;
+    const items=[...document.querySelectorAll(itemSelector)].filter(it=>!it.querySelector('th'));
+    const apply=()=>{const q=inp.value.trim().toLowerCase();
+      items.forEach(it=>{it.style.display=(!q||it.textContent.toLowerCase().includes(q))?'':'none';});
+      document.querySelectorAll('[data-sxn]').forEach(card=>{
+        const vis=[...card.querySelectorAll(itemSelector)].some(it=>it.style.display!=='none');
+        card.style.display=vis?'':'none';
+        const h=card.previousElementSibling;
+        if(h&&h.classList&&h.classList.contains('sec-title')) h.style.display=vis?'':'none';
+      });
+    };
+    inp.addEventListener('input',apply);
   }
 
   // ---------- MY COMMISSION (RM sees own money only) ----------
@@ -1259,7 +1281,8 @@ async function resolveOrg(){
         <button class="ms-btn ${sel==='all'?'active':''}" data-cbrm="all">All (${all.length})</button>
         ${per.map(r=>`<button class="ms-btn ${sel===r.slug?'active':''}" data-cbrm="${r.slug}">${esc(r.name)} (${r.n})</button>`).join('')}
       </div>
-      <div class="card" style="padding:6px 0;"><table>
+      ${all.length>1?searchBox('cmdcli-search','Search clients by name or RM…'):''}
+      <div class="card" style="padding:6px 0;"><table id="tbl-cmdcli">
         <tr><th>Client</th><th>RM</th><th>Premium</th><th>Renewal</th><th>Last visit</th><th>Health</th></tr>
         ${shown.map(p=>{const oc=(p.activity||[]).some(a=>a.type==='claim'&&!a.resolved);
           return `<tr><td><b>${esc(p.client)}</b>${oc?' <span class="stale-tag" style="margin:0;background:var(--red-soft);color:var(--red);">claim</span>':''}</td>
@@ -1272,6 +1295,7 @@ async function resolveOrg(){
   }
   function wireCmdClients(){
     document.querySelectorAll('[data-cbrm]').forEach(b=>b.onclick=()=>{S._cmdBookRM=b.dataset.cbrm;render();});
+    wireSearch('cmdcli-search','#tbl-cmdcli tr');
   }
 
   // ---- Pipeline Deals: every RM's live pipeline, full detail with premium ----
@@ -1295,9 +1319,10 @@ async function resolveOrg(){
         ${per.map(r=>`<button class="ms-btn ${sel===r.slug?'active':''}" data-cprm="${r.slug}">${esc(r.name)} (${r.n})</button>`).join('')}
         ${houseN?`<button class="ms-btn ${sel==='__house'?'active':''}" data-cprm="__house">House (${houseN})</button>`:''}
       </div>
+      ${shown.length>1?searchBox('cmdpipe-search','Search deals by prospect or RM…'):''}
       ${[7,6,5,4,3,2,1].map(st=>{const ds=byStage[st];if(!ds.length)return '';
         return `<div class="sec-title">${esc(STAGES[st-1])} (${ds.length})</div>
-        <div class="card">${ds.map(d=>`<div class="change-item">
+        <div class="card" data-sxn>${ds.map(d=>`<div class="change-item">
           <div class="change-ico" style="background:${d.health==='red'?'var(--red-soft)':d.health==='amber'?'var(--amber-soft)':'var(--accent-soft)'};">\u{1F3E2}</div>
           <div style="flex:1;"><div class="change-txt"><b>${esc(d.prospectName)}</b> — ${esc(d.rmName)}</div>
             <div class="change-time">${d.nextStep?esc(d.nextStep):'No next step set'}${d.roadblocks?` · \u26A0 ${esc(d.roadblocks)}`:''}</div></div>
@@ -1308,6 +1333,7 @@ async function resolveOrg(){
   }
   function wireCmdPipeline(){
     document.querySelectorAll('[data-cprm]').forEach(b=>b.onclick=()=>{S._cmdPipeRM=b.dataset.cprm;render();});
+    wireSearch('cmdpipe-search','.change-item');
   }
 
   function cmdProblems(){
@@ -1542,7 +1568,8 @@ async function resolveOrg(){
         <button class="ms-btn ${sel==='all'?'active':''}" data-brm="all">All (${all.length})</button>
         ${per.map(r=>`<button class="ms-btn ${sel===r.slug?'active':''}" data-brm="${r.slug}">${esc(r.name)} (${r.n})</button>`).join('')}
       </div>
-      <div class="card" style="padding:6px 0;"><table>
+      ${all.length>1?searchBox('book-search','Search clients by name or RM…'):''}
+      <div class="card" style="padding:6px 0;"><table id="tbl-book">
         <tr><th>Client</th><th>RM</th><th>Premium</th><th>Renewal</th><th>Last visit</th><th>Health</th><th></th></tr>
         ${shown.map(p=>`<tr><td><b>${esc(p.client)}</b>${p.notes?`<div class="change-time">${esc(p.notes)}</div>`:''}${p.movement?`<div class="change-time">${esc(p.movement)}${(+p.impact||0)>0?` <span style="color:var(--green);font-weight:700;">+${zar(p.impact)}</span>`:''}</div>`:''}</td>
           <td>${esc(p.rmName)}</td><td class="mono">${zar(p.premium)}</td>
@@ -1555,6 +1582,7 @@ async function resolveOrg(){
     </div>`;
   }
   function wireMgrBook(){
+    wireSearch('book-search','#tbl-book tr');
     document.querySelectorAll('[data-brm]').forEach(b=>b.onclick=()=>{S._bookRM=b.dataset.brm;render();});
     document.querySelectorAll('[data-pedit]').forEach(b=>b.onclick=()=>{
       const [slug,id]=b.dataset.pedit.split(':');
@@ -1733,7 +1761,7 @@ async function resolveOrg(){
         <div class="sec-title" style="margin:0;">${S.showArch?'Archived':'Active'} (<span id="pipe-count">${list.length}</span>)</div>
         <button class="link-btn" id="arch-t">${S.showArch?'← Back to active':'View archived'}</button>
       </div>
-      ${(list.length>3)?`<div class="field" style="margin-bottom:10px;"><input id="pipe-search" placeholder="\u{1F50D} Search by name, industry or next step…" autocomplete="off"></div>`:''}
+      ${(list.length>1)?`<div class="field" style="margin-bottom:10px;"><input id="pipe-search" placeholder="\u{1F50D} Search by name, industry or next step…" autocomplete="off"></div>`:''}
       ${list.length===0?`<div class="empty"><div class="disp">${S.showArch?'Nothing archived':'No deals yet'}</div>${!S.showArch?'Tap + to add your first prospect.':''}</div>`:
         list.map(d=>dealCard('bernard',d,!S.showArch)).join('')}
       <div id="pipe-nomatch" class="empty" style="display:none;"><div class="disp">No matches</div><div>No leads match your search.</div></div>
