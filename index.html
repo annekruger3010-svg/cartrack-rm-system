@@ -320,6 +320,7 @@ async function resolveOrg(){
     if(k.startsWith('payroll:')) return {kind:'payroll', month:k.slice(8)};
     if(k==='config:pins') return {kind:'pins'};
     if(k==='config:meta') return {kind:'meta'};
+    if(k.startsWith('config:')) return {kind:'cfg', key:k.slice(7)};   // logins + any future config keys
     if(k.startsWith('changes:')) return {kind:'changes', date:k.slice(8)};
     if(k.startsWith('lost:')) return {kind:'lost', slug:k.slice(5)};
     return {kind:'unknown', key:k};
@@ -361,6 +362,10 @@ async function resolveOrg(){
       const {data,error}=await sb.from('config').select('value').eq('org_id',org).eq('key',key).maybeSingle();
       if(error)throw error; return data?data.value:null;
     }
+    if(route.kind==='cfg'){
+      const {data,error}=await sb.from('config').select('value').eq('org_id',org).eq('key',route.key).maybeSingle();
+      if(error)throw error; return data?data.value:null;
+    }
     if(route.kind==='changes'){
       const {data,error}=await sb.from('config').select('value').eq('org_id',org).eq('key','changes:'+route.date).maybeSingle();
       if(error)throw error; return data?data.value:null;
@@ -394,6 +399,10 @@ async function resolveOrg(){
     if(route.kind==='pins'||route.kind==='meta'){
       const key=route.kind==='pins'?'pins':'meta';
       const {error}=await sb.from('config').upsert({org_id:org, key, value:val},{onConflict:'org_id,key'});
+      if(error)throw error; return true;
+    }
+    if(route.kind==='cfg'){
+      const {error}=await sb.from('config').upsert({org_id:org, key:route.key, value:val},{onConflict:'org_id,key'});
       if(error)throw error; return true;
     }
     if(route.kind==='changes'){
