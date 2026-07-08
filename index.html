@@ -171,12 +171,50 @@
   .cts .pay-inp{width:100px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;padding:6px 8px;border:1.5px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);}
   .cts .pay-inp:focus{outline:none;border-color:var(--accent);}
   .cts .pay-inp.pay-pct{width:60px;}
+
+  /* ---- Daily PDF report (print layer) ---- */
+  #dr-root{display:none;}
+  @media print{
+    @page{size:A4;margin:11mm 0;}
+    html,body{background:#fff !important;}
+    #cts-root{display:none !important;}
+    #dr-root{display:block !important;}
+    *{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+  .dr{font-family:'IBM Plex Sans',sans-serif;color:#1E222A;max-width:720px;margin:0 auto;}
+  .dr-mast{background:#0B0C0F;color:#fff;padding:15px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .dr-mast .b{font-family:'Saira',sans-serif;font-weight:800;font-size:16px;letter-spacing:.02em;}
+  .dr-mast .b span{color:#F47735;}
+  .dr-mast .d{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:#F47735;text-align:right;line-height:1.6;}
+  .dr-mast .d .d2{color:#A8AFBC;}
+  .dr-band{height:4px;background:#F47735;}
+  .dr-body{padding:18px 20px 0;}
+  .dr-body h1{font-family:'Saira',sans-serif;font-weight:800;font-size:23px;margin:0 0 2px;letter-spacing:-.01em;}
+  .dr-body .sub{font-size:12px;color:#5E6675;margin:0 0 16px;}
+  .dr-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:6px;}
+  .dr-k{border:1px solid #E7EAEF;border-radius:9px;padding:11px 13px;position:relative;overflow:hidden;}
+  .dr-k::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#0B0C0F;}
+  .dr-k .l{font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#5E6675;}
+  .dr-k .v{font-family:'Saira',sans-serif;font-weight:800;font-size:19px;margin-top:3px;color:#0B0C0F;}
+  .dr-health{font-size:12.5px;margin:10px 0 4px;color:#2F343D;}
+  .dr-health b{font-size:14px;}
+  .dr h2{font-family:'Saira',sans-serif;font-weight:800;font-size:12.5px;text-transform:uppercase;letter-spacing:.06em;margin:20px 0 9px;padding-bottom:5px;border-bottom:2px solid #0B0C0F;color:#0B0C0F;}
+  .dr .rm-blk{margin-bottom:12px;break-inside:avoid;}
+  .dr .rm-nm{font-weight:700;font-size:13px;margin-bottom:2px;color:#0B0C0F;}
+  .dr .mv{font-size:12.5px;line-height:1.5;padding:4px 0 4px 15px;position:relative;border-bottom:1px solid #F1F2F5;}
+  .dr .mv::before{content:"›";position:absolute;left:2px;color:#F47735;font-weight:800;}
+  .dr .none{font-size:12.5px;color:#7C8492;padding:4px 0;}
+  .dr .attn{background:#FEF4EC;border:1px solid #FAD9C2;border-radius:9px;padding:6px 13px;}
+  .dr .attn .a{font-size:12px;line-height:1.5;padding:5px 0;border-bottom:1px solid #FAD9C2;}
+  .dr .attn .a:last-child{border-bottom:none;}
+  .dr .foot{margin-top:20px;padding:10px 20px;border-top:1px solid #E7EAEF;font-size:8.5px;color:#A8AFBC;text-transform:uppercase;letter-spacing:.1em;font-family:'IBM Plex Mono',monospace;display:flex;justify-content:space-between;}
 </style>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Saira:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 
 <div class="cts" id="cts-root"><div style="padding:60px;text-align:center;color:#5E6675;font-family:'IBM Plex Sans',sans-serif;">Loading…</div></div>
+<div id="dr-root"></div>
 
 <script>
 /* ============================================================
@@ -1362,11 +1400,52 @@ async function resolveOrg(){
 
   function cmdChanges(){
     return `<div class="wrap wrap-wide">
-      <div class="note">Every change RMs made yesterday and today — stage moves, new prospects, health changes. Tap "Copy morning report" to paste into WhatsApp or email. <b>Tip:</b> open this link first thing each morning; it's your daily standup in one screen.</div>
+      <div class="note">Every change RMs made yesterday and today — stage moves, new prospects, health changes. Tap <b>Save PDF report</b> for a clean one-pager that reads perfectly on any phone — share it straight to WhatsApp. <b>Tip:</b> open this first thing each morning; it's your daily standup in one screen.</div>
       <div id="changes-body"><div class="empty" style="padding:30px;">Loading changes…</div></div>
-      <button class="btn btn-navy btn-full" id="gen-rep" style="margin-top:8px;">Copy morning report</button>
+      <button class="btn btn-primary btn-full" id="pdf-rep" style="margin-top:8px;">\u{1F4C4} Save PDF report (for WhatsApp)</button>
+      <button class="btn btn-full" id="gen-rep" style="margin-top:8px;">Copy text version</button>
       <div id="rep-out"></div>
     </div>`;
+  }
+  // Branded, single-column daily report → the browser's "Save as PDF" makes a
+  // WhatsApp-friendly file that reads the same on every phone.
+  function dailyReportHTML(cy){
+    const deals=allActive();
+    const total=deals.reduce((s,d)=>s+(+d.premium||0),0);
+    const c={green:0,amber:0,red:0};deals.forEach(d=>c[d.health]++);
+    const stale=deals.filter(d=>daysSince(d.lastActivity||d.stageEntryDate)>=STALE_DAYS&&d.stage<7)
+      .sort((a,b)=>daysSince(b.lastActivity||b.stageEntryDate)-daysSince(a.lastActivity||a.stageEntryDate));
+    const dstr=new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    let moves='<div class="none">No changes were logged yesterday.</div>';
+    if(cy&&cy.length){const byRM={};cy.slice().reverse().forEach(x=>{(byRM[x.rm]=byRM[x.rm]||[]).push(x);});
+      moves=Object.keys(byRM).map(rm=>`<div class="rm-blk"><div class="rm-nm">${esc(rm)}</div>${byRM[rm].map(x=>`<div class="mv">${esc(x.text)}</div>`).join('')}</div>`).join('');}
+    const attn=stale.length
+      ? `<div class="attn">${stale.slice(0,12).map(d=>`<div class="a"><b>${esc(d.prospectName)}</b> — ${esc(d.rmName)} · ${daysSince(d.lastActivity||d.stageEntryDate)} days no movement · ${esc(STAGES[d.stage-1])}</div>`).join('')}</div>`
+      : '<div class="none">Nothing stale — the floor is on top of it. \u{1F44D}</div>';
+    return `<div class="dr">
+      <div class="dr-mast"><div class="b">CARTRACK <span>INSURANCE</span></div>
+        <div class="d">Daily Pipeline Report<br><span class="d2">Commercial Division</span></div></div>
+      <div class="dr-band"></div>
+      <div class="dr-body">
+        <h1>Morning Report</h1>
+        <div class="sub">${dstr}</div>
+        <div class="dr-kpis">
+          <div class="dr-k"><div class="l">Active deals</div><div class="v">${deals.length}</div></div>
+          <div class="dr-k"><div class="l">Pipeline value</div><div class="v" style="font-size:15px;">${zar(total)}</div></div>
+          <div class="dr-k"><div class="l">Stale (${STALE_DAYS}d+)</div><div class="v"${stale.length?' style="color:#AE372C;"':''}>${stale.length}</div></div>
+        </div>
+        <div class="dr-health">Pipeline health: <b style="color:#2C7A56;">\u{1F7E2} ${c.green}</b>  <b style="color:#B07D18;">\u{1F7E1} ${c.amber}</b>  <b style="color:#AE372C;">\u{1F534} ${c.red}</b></div>
+        <h2>Yesterday's moves</h2>
+        ${moves}
+        <h2>Needs attention</h2>
+        ${attn}
+      </div>
+      <div class="foot"><span>Cartrack Insurance · Commercial Division</span><span>Internal use only · FSP 17266</span></div>
+    </div>`;
+  }
+  function printDailyReport(cy){
+    document.getElementById('dr-root').innerHTML=dailyReportHTML(cy);
+    setTimeout(()=>window.print(),80);
   }
   async function wireCmdChanges(){
     const y=new Date(Date.now()-864e5).toISOString().slice(0,10);
@@ -1381,6 +1460,7 @@ async function resolveOrg(){
         <div style="flex:1;"><div class="change-txt">${esc(c.text)}</div><div class="change-time">${esc(c.rm)} · ${new Date(c.at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div></div></div>`).join('')}</div>`;
     };
     box.innerHTML=sec('Today',ct)+sec('Yesterday',cy);
+    document.getElementById('pdf-rep').onclick=()=>printDailyReport(cy);
     document.getElementById('gen-rep').onclick=()=>{
       const rep=buildReport(cy,y);
       const out=document.getElementById('rep-out');
