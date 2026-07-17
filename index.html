@@ -316,6 +316,17 @@ async function resolveOrg(){
   const _mem={};
   function _memGet(k){return (k in _mem)?JSON.parse(_mem[k]):null;}
   function _memSet(k,json){_mem[k]=json;}
+  // Durable outbox (mobile fix). A phone freezes the tab the moment it's backgrounded and
+  // kills in-flight saves, then evicts the tab entirely — so an unconfirmed write held only
+  // in memory is lost forever and the next boot re-pulls old server state over it. Every
+  // save is flagged here (with its value) BEFORE we attempt the network, cleared only on
+  // confirmed success, and replayed through the merge-safe layer on next boot / next
+  // foreground / network-restore. localStorage writes are synchronous, so the flag survives
+  // even when the OS kills the page mid-save.
+  const _OBK='ct_outbox_v1';
+  function _obAll(){try{return JSON.parse(localStorage.getItem(_OBK))||{};}catch(e){return {};}}
+  function _obPut(k,v){try{const o=_obAll();o[k]={v:v,at:Date.now()};localStorage.setItem(_OBK,JSON.stringify(o));}catch(e){}}
+  function _obClear(k){try{const o=_obAll();if(k in o){delete o[k];localStorage.setItem(_OBK,JSON.stringify(o));}}catch(e){}}
 
   // Map a storage key -> {table, kind, slug/month/date} so the router knows where to go.
   function _route(k){
@@ -523,9 +534,11 @@ async function resolveOrg(){
   async function sSet(k,v){
     _memSet(k,JSON.stringify(v)); // always mirror locally so the session stays consistent even if the write fails
     if(!sb)return true;
+    _obPut(k,v); // durable flag BEFORE the network attempt — survives the OS killing the page mid-save
     const run=async()=>{
       try{
         const out=await _sbSetAdopt(k,v);
+        _obClear(k);
         delete _pendingWrites[k];_syncBanner();
         return out;
       }catch(e){
@@ -538,6 +551,21 @@ async function resolveOrg(){
     const p=(_writeChain[k]||Promise.resolve()).then(run,run);
     _writeChain[k]=p;
     return p;
+  }
+  // Replay anything still flagged in the outbox — a save the phone killed before it was
+  // confirmed. Runs through sSet, so the merge-safe layer applies: per-row upserts,
+  // never resurrect deletions, server-newer rows win. Safe to replay even days later.
+  let _obReplaying=false;
+  async function _obReplay(){
+    if(!sb||_obReplaying)return;
+    const o=_obAll(); const keys=Object.keys(o);
+    if(!keys.length)return;
+    _obReplaying=true;
+    try{
+      const res=await Promise.all(keys.map(k=>sSet(k,o[k].v)));
+      if(res.every(r=>r!==false))toast('Changes that had not reached the server were saved');
+    }catch(e){console.warn('[Cartrack] outbox replay failed:',e.message);}
+    finally{_obReplaying=false;}
   }
   setInterval(()=>{
     if(!sb)return;
@@ -613,9 +641,21 @@ async function resolveOrg(){
     }catch(e){console.warn('[Cartrack] background refresh failed:',e.message);}
     finally{_refreshing=false;}
   }
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshFromServer(true);});
-  window.addEventListener('focus',()=>refreshFromServer(false));
-  window.addEventListener('pageshow',e=>{if(e.persisted)refreshFromServer(true);});
+  // Phones freeze the tab (and kill its requests) the instant it's backgrounded — so the
+  // moment we're visible again or the network returns, first push anything unconfirmed
+  // (outbox + retry queue), then pull. Waiting for the 25s timer is too late on mobile.
+  async function _pushThenRefresh(force){
+    if(sb){
+      const keys=Object.keys(_pendingWrites);
+      if(keys.length)await Promise.all(keys.map(k=>sSet(k,_memGet(k)))).catch(()=>{});
+      await _obReplay();
+    }
+    refreshFromServer(force);
+  }
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')_pushThenRefresh(true);});
+  window.addEventListener('focus',()=>_pushThenRefresh(false));
+  window.addEventListener('pageshow',e=>{if(e.persisted)_pushThenRefresh(true);});
+  window.addEventListener('online',()=>_pushThenRefresh(true));
   setInterval(()=>{if(document.visibilityState==='visible')refreshFromServer(false);},60000);
 
   // ---------- SELF-HEALING SEED (idempotent; only fills EMPTY stores, never clobbers edits) ----------
@@ -761,7 +801,7 @@ async function resolveOrg(){
   // Support/debug handle (console + automated tests): inspect state, force a sync.
   window.CTS_DEBUG={S,sGet,sSet,loadRM,saveRM,loadPortfolio,savePortfolio,loadLost,saveLost,refreshFromServer,logChange,uid,render,recoveryAnalyse,_recApply};
 
-  (async function(){await loadConfig();await seedIfEmpty();await loadAll();await loadAllPortfolio();await loadHouse();await loadAllLost();S.pendingImport=captureImport();S.screen='gate';render();})();
+  (async function(){await loadConfig();await _obReplay();/* push any save a killed mobile tab never confirmed BEFORE pulling server state */await seedIfEmpty();await loadAll();await loadAllPortfolio();await loadHouse();await loadAllLost();S.pendingImport=captureImport();S.screen='gate';render();})();
 
   // ================= RENDER ROUTER =================
   function render(){
