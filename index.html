@@ -799,9 +799,27 @@ async function resolveOrg(){
 
   // ---------- INIT ----------
   // Support/debug handle (console + automated tests): inspect state, force a sync.
-  window.CTS_DEBUG={S,sGet,sSet,loadRM,saveRM,loadPortfolio,savePortfolio,loadLost,saveLost,refreshFromServer,logChange,uid,render,recoveryAnalyse,_recApply};
+  window.CTS_DEBUG={S,sGet,sSet,loadRM,saveRM,loadPortfolio,savePortfolio,loadLost,saveLost,refreshFromServer,logChange,uid,render,recoveryAnalyse,_recApply,_promoteWonToBook:(...a)=>_promoteWonToBook(...a),_backfillWonClients:(...a)=>_backfillWonClients(...a)};
 
-  (async function(){await loadConfig();await _obReplay();/* push any save a killed mobile tab never confirmed BEFORE pulling server state */await seedIfEmpty();await loadAll();await loadAllPortfolio();await loadHouse();await loadAllLost();S.pendingImport=captureImport();S.screen='gate';render();})();
+  // One-time backfill: deals already sitting at stage 7 (Won) from before the
+  // won→Active-Clients promotion existed get added to their RM's book now.
+  // Runs once org-wide (config flag), de-dupes by name, so clients deleted from
+  // a book afterwards stay deleted.
+  async function _backfillWonClients(){
+    if(!sb)return;
+    try{
+      if(await sGet('config:wonBackfillV1'))return;
+      let n=0;
+      for(const r of RMS){
+        for(const d of (S.deals[r.slug]||[]).filter(d=>d.stage===7&&!d.archived)){
+          if(await _promoteWonToBook(r.slug,d))n++;
+        }
+      }
+      await sSet('config:wonBackfillV1',{done:true,at:nowISO(),added:n});
+      if(n)console.log('[Cartrack] won-deal backfill: added',n,'client(s) to Active Clients');
+    }catch(e){console.warn('[Cartrack] won backfill skipped:',e.message);}
+  }
+  (async function(){await loadConfig();await _obReplay();/* push any save a killed mobile tab never confirmed BEFORE pulling server state */await seedIfEmpty();await loadAll();await loadAllPortfolio();await _backfillWonClients();await loadHouse();await loadAllLost();S.pendingImport=captureImport();S.screen='gate';render();})();
 
   // ================= RENDER ROUTER =================
   function render(){
@@ -817,7 +835,7 @@ async function resolveOrg(){
   // ================= GATE =================
   // Build stamp shown on the sign-in card so support can instantly tell which
   // version a device is running. Bump the date whenever a change is pushed.
-  const APP_VERSION='v2026.07.16';
+  const APP_VERSION='v2026.07.17';
   function renderGate(){
     if(!S.gateStep){
       root.innerHTML=`<div class="gate"><div class="gate-card">
@@ -1402,8 +1420,31 @@ async function resolveOrg(){
         else logChange(slug,`Updated ${d.prospectName}`,'update');
         if(old.health!==d.health)logChange(slug,`${d.prospectName}: health ${HEALTH[old.health]}→${HEALTH[d.health]}`,'health');
       }else{S.deals[slug].push(d);logChange(slug,`New prospect added: ${d.prospectName} (${zar(d.premium)})`,'new');}
-      const ok=await saveRM(slug);S.modal=null;render();if(ok)toast('Saved');
+      const ok=await saveRM(slug);
+      // A deal set to stage 7 (Won) used to stay ONLY in the pipeline — the book of
+      // business was fed exclusively by the import-from-comparison popup, so wins made
+      // directly in the pipeline never showed under Active Clients. Promote them now.
+      const becameWon=st===7&&(!ex||ex.stage!==7);
+      if(becameWon&&slug!=='__house'){
+        const added=await _promoteWonToBook(slug,d);
+        if(added)toast(`${d.prospectName} won — added to Active Clients 🎉`);
+      }
+      S.modal=null;render();if(ok&&!becameWon)toast('Saved');
     };
+  }
+  // Add a won deal to the RM's Active Clients (book of business). De-dupes by client
+  // name so re-saving a won deal, or a client already imported from a comparison,
+  // never creates a duplicate. Returns true if a record was actually added.
+  async function _promoteWonToBook(slug,d){
+    if(!S.portLoaded[slug])await loadPortfolio(slug);      // never overwrite an unloaded book
+    if(_findByName(S.portfolio[slug],d.prospectName))return false;
+    const rec={id:uid(),client:d.prospectName,rm:slug,premium:+d.premium||0,
+      renewal:'',lastVisit:'',movement:'',impact:0,
+      notes:['Won from pipeline',d.industry].filter(Boolean).join(' · '),health:'green',activity:[]};
+    S.portfolio[slug]=S.portfolio[slug]||[];S.portfolio[slug].push(rec);
+    await savePortfolio(slug);
+    logChange(slug,`${d.prospectName} won — added to Active Clients (${zar(d.premium)})`,'won');
+    return true;
   }
 
   // ================= COMMAND VIEW (Brendan) =================
