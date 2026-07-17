@@ -815,6 +815,9 @@ async function resolveOrg(){
   }
 
   // ================= GATE =================
+  // Build stamp shown on the sign-in card so support can instantly tell which
+  // version a device is running. Bump the date whenever a change is pushed.
+  const APP_VERSION='v2026.07.16';
   function renderGate(){
     if(!S.gateStep){
       root.innerHTML=`<div class="gate"><div class="gate-card">
@@ -830,6 +833,7 @@ async function resolveOrg(){
         <div style="text-align:center;margin-top:18px;border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:9px;">
           <a href="https://cartrack-commercial.github.io/" style="color:var(--accent-ink);font-size:12.5px;font-weight:600;text-decoration:none;">&#8592; Back to launcher</a>
           <button class="link-btn" id="g-op" style="color:var(--faint);font-size:11.5px;">Operator access</button>
+          <div style="color:var(--faint);font-size:10.5px;">${APP_VERSION}</div>
         </div>
       </div></div>`;
       document.getElementById('g-rm').onclick=()=>{S.gateStep='rm-pick';S.err='';render();};
