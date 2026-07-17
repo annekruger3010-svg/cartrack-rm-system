@@ -590,7 +590,7 @@ async function resolveOrg(){
     // commission rate (% of premium) straight from the June actuals. Payout = premium × rate.
     const rows=[];
     for(const r of RMS){
-      (S.portfolio[r.slug]||[]).forEach(p=>{
+      (S.portfolio[r.slug]||[]).filter(p=>!p.archived).forEach(p=>{
         const rate=(p.commRate!=null)?+p.commRate:6.25;
         rows.push({id:uid(),client:p.client,rm:r.slug,premium:+p.premium||0,commRate:rate,policy:p.policy||'',insurer:p.insurer||''});
       });
@@ -818,6 +818,21 @@ async function resolveOrg(){
       await sSet('config:wonBackfillV1',{done:true,at:nowISO(),added:n});
       if(n)console.log('[Cartrack] won-deal backfill: added',n,'client(s) to Active Clients');
     }catch(e){console.warn('[Cartrack] won backfill skipped:',e.message);}
+    // Sweep 2: clear existing won deals off the active pipeline (Bronwyn's report —
+    // "shows under My Clients but still sits on the Pipeline sheet"). Promote-if-missing
+    // (no revive: never resurrects a deliberately removed client), then archive the deal.
+    try{
+      if(await sGet('config:wonSweepV2'))return;
+      let m=0;
+      for(const r of RMS){
+        const won=(S.deals[r.slug]||[]).filter(d=>d.stage===7&&!d.archived);
+        if(!won.length)continue;
+        for(const d of won){await _promoteWonToBook(r.slug,d,false);d.archived=true;m++;}
+        await saveRM(r.slug);
+      }
+      await sSet('config:wonSweepV2',{done:true,at:nowISO(),archived:m});
+      if(m)console.log('[Cartrack] won-deal sweep: cleared',m,'won deal(s) off active pipelines');
+    }catch(e){console.warn('[Cartrack] won sweep skipped:',e.message);}
   }
   (async function(){await loadConfig();await _obReplay();/* push any save a killed mobile tab never confirmed BEFORE pulling server state */await seedIfEmpty();await loadAll();await loadAllPortfolio();await _backfillWonClients();await loadHouse();await loadAllLost();S.pendingImport=captureImport();S.screen='gate';render();})();
 
@@ -835,7 +850,7 @@ async function resolveOrg(){
   // ================= GATE =================
   // Build stamp shown on the sign-in card so support can instantly tell which
   // version a device is running. Bump the date whenever a change is pushed.
-  const APP_VERSION='v2026.07.17';
+  const APP_VERSION='v2026.07.17b';
   function renderGate(){
     if(!S.gateStep){
       root.innerHTML=`<div class="gate"><div class="gate-card">
@@ -1042,7 +1057,7 @@ async function resolveOrg(){
 
   // ---------- MY CLIENTS (RM's own book — view + edit activity) ----------
   function rmClients(slug){
-    const book=(S.portfolio[slug]||[]).slice().sort((a,b)=>(+b.premium||0)-(+a.premium||0));
+    const book=(S.portfolio[slug]||[]).filter(p=>!p.archived).sort((a,b)=>(+b.premium||0)-(+a.premium||0));
     const totalPrem=book.reduce((s,p)=>s+(+p.premium||0),0);
     const soon=(iso)=>{if(!iso)return false;const d=new Date(iso+'T00:00:00');if(isNaN(d))return false;const diff=(d-new Date().setHours(0,0,0,0))/864e5;return diff>=0&&diff<=60;};
     const renewals=book.filter(p=>soon(p.renewal));
@@ -1126,6 +1141,17 @@ async function resolveOrg(){
       </div>`).join('')}</div>`:'<div class="help" style="margin-top:8px;">No activity logged yet. Log the first visit, claim or change above.</div>'}
 
       <button class="btn btn-primary btn-full" id="cf-save" style="margin-top:14px;">Save client</button>
+      ${S.modal._remove?`
+      <div class="card" style="margin-top:10px;border:1.5px solid var(--red);background:var(--red-soft);">
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px;">Remove this client from the book?</div>
+        <div class="help" style="margin-bottom:8px;">The client disappears from Active Clients and stops counting toward the book and commission. Nothing is deleted — Brendan can see and restore removed clients from Command View.</div>
+        <div class="field"><label>Why is the client being removed?</label><select id="cf-rm-reason">
+          <option>Policy cancelled</option><option>Moved to another broker</option>
+          <option>Duplicate entry</option><option>Added in error</option><option>Other</option></select></div>
+        <div style="display:flex;gap:8px;"><button class="btn" style="flex:1;" id="cf-rm-cancel">Keep client</button>
+        <button class="btn" style="flex:1;background:var(--red);border-color:var(--red);color:#fff;" id="cf-rm-go">Remove from book</button></div>
+      </div>`:
+      `<button class="btn btn-full" id="cf-remove" style="margin-top:8px;color:var(--red);">Remove from book…</button>`}
     </div></div>`;
   }
   function wireClientModal(){
@@ -1155,6 +1181,17 @@ async function resolveOrg(){
     document.querySelectorAll('[data-claim]').forEach(b=>b.onclick=async()=>{
       const rec=p();if(!rec)return;const a=(rec.activity||[]).find(x=>x.id===b.dataset.claim);if(a){a.resolved=!a.resolved;await savePortfolio(slug);render();toast(a.resolved?'Claim resolved':'Claim reopened');}
     });
+    // remove from book (soft — restorable from Command View, never a hard delete for RMs)
+    const rmBtn=document.getElementById('cf-remove');if(rmBtn)rmBtn.onclick=()=>{S.modal._remove=true;render();};
+    const rmCancel=document.getElementById('cf-rm-cancel');if(rmCancel)rmCancel.onclick=()=>{S.modal._remove=false;render();};
+    const rmGo=document.getElementById('cf-rm-go');if(rmGo)rmGo.onclick=async()=>{
+      const rec=p();if(!rec)return;
+      const reason=document.getElementById('cf-rm-reason').value;
+      rec.archived=true;rec.archivedReason=reason;rec.archivedAt=nowISO();
+      await savePortfolio(slug);
+      logChange(slug,`${rec.client} removed from Active Clients — ${reason}`,'update');
+      S.modal=null;render();toast('Client removed — Brendan can restore it if needed');
+    };
     // save quick fields
     document.getElementById('cf-save').onclick=async()=>{
       const rec=p();if(!rec)return;
@@ -1276,7 +1313,7 @@ async function resolveOrg(){
 
     // Estimated: what the RM's CURRENT live book is worth to them, using each policy's own
     // commission rate. Reads straight from their portfolio, updates the moment they edit a premium.
-    const book=(S.portfolio[slug]||[]);
+    const book=(S.portfolio[slug]||[]).filter(p=>!p.archived);
     const bookPrem=book.reduce((s,p)=>s+(+p.premium||0),0);
     const estComm=book.reduce((s,p)=>s+payoutOf(p),0);
 
@@ -1332,8 +1369,9 @@ async function resolveOrg(){
 
   // ---------- LEADERBOARD (no commission) ----------
   function leaderboard(meSlug){
-    const rows=RMS.map(r=>{const a=(S.deals[r.slug]||[]).filter(d=>!d.archived);
-      return {slug:r.slug,name:r.name,deals:a.length,premium:a.reduce((s,d)=>s+(+d.premium||0),0),won:a.filter(d=>d.stage===7).length};});
+    const rows=RMS.map(r=>{const all=S.deals[r.slug]||[],a=all.filter(d=>!d.archived);
+      // won counts stage-7 across archived too — won deals are cleared off the active pipeline
+      return {slug:r.slug,name:r.name,deals:a.length,premium:a.reduce((s,d)=>s+(+d.premium||0),0),won:all.filter(d=>d.stage===7).length};});
     const metric=S.lbMetric;
     rows.sort((a,b)=>b[metric]-a[metric]);
     const max=Math.max(1,...rows.map(r=>r[metric]));
@@ -1420,24 +1458,34 @@ async function resolveOrg(){
         else logChange(slug,`Updated ${d.prospectName}`,'update');
         if(old.health!==d.health)logChange(slug,`${d.prospectName}: health ${HEALTH[old.health]}→${HEALTH[d.health]}`,'health');
       }else{S.deals[slug].push(d);logChange(slug,`New prospect added: ${d.prospectName} (${zar(d.premium)})`,'new');}
-      const ok=await saveRM(slug);
       // A deal set to stage 7 (Won) used to stay ONLY in the pipeline — the book of
       // business was fed exclusively by the import-from-comparison popup, so wins made
-      // directly in the pipeline never showed under Active Clients. Promote them now.
+      // directly in the pipeline never showed under Active Clients. Promote them now,
+      // and clear the deal off the active pipeline (archived — still under "Archived",
+      // still counted in the Won leaderboard).
       const becameWon=st===7&&(!ex||ex.stage!==7);
+      if(becameWon&&slug!=='__house')d.archived=true;
+      const ok=await saveRM(slug);
       if(becameWon&&slug!=='__house'){
-        const added=await _promoteWonToBook(slug,d);
-        if(added)toast(`${d.prospectName} won — added to Active Clients 🎉`);
+        await _promoteWonToBook(slug,d,true);
+        toast(`${d.prospectName} won — moved to Active Clients 🎉`);
       }
       S.modal=null;render();if(ok&&!becameWon)toast('Saved');
     };
   }
   // Add a won deal to the RM's Active Clients (book of business). De-dupes by client
   // name so re-saving a won deal, or a client already imported from a comparison,
-  // never creates a duplicate. Returns true if a record was actually added.
-  async function _promoteWonToBook(slug,d){
+  // never creates a duplicate. revive=true re-activates a previously removed client
+  // (a fresh win in the pipeline should bring them back); the migration sweep passes
+  // false so it can never resurrect a client an RM deliberately removed.
+  async function _promoteWonToBook(slug,d,revive){
     if(!S.portLoaded[slug])await loadPortfolio(slug);      // never overwrite an unloaded book
-    if(_findByName(S.portfolio[slug],d.prospectName))return false;
+    const hit=_findByName(S.portfolio[slug],d.prospectName);
+    if(hit){
+      if(hit.archived&&revive){hit.archived=false;delete hit.archivedReason;delete hit.archivedAt;
+        await savePortfolio(slug);logChange(slug,`${d.prospectName} won again — restored to Active Clients`,'won');return true;}
+      return false;
+    }
     const rec={id:uid(),client:d.prospectName,rm:slug,premium:+d.premium||0,
       renewal:'',lastVisit:'',movement:'',impact:0,
       notes:['Won from pipeline',d.industry].filter(Boolean).join(' · '),health:'green',activity:[]};
@@ -1673,7 +1721,8 @@ async function resolveOrg(){
 
   // ---- Active Clients: the whole book across the team, with premium + activity ----
   function cmdClients(){
-    const all=[];RMS.forEach(r=>(S.portfolio[r.slug]||[]).forEach(p=>all.push(Object.assign({rmName:r.name,rmSlug:r.slug},p))));
+    const all=[];RMS.forEach(r=>(S.portfolio[r.slug]||[]).filter(p=>!p.archived).forEach(p=>all.push(Object.assign({rmName:r.name,rmSlug:r.slug},p))));
+    const removed=[];RMS.forEach(r=>(S.portfolio[r.slug]||[]).filter(p=>p.archived).forEach(p=>removed.push(Object.assign({rmName:r.name,rmSlug:r.slug},p))));
     const sel=S._cmdBookRM||'all';
     const shown=(sel==='all'?all:all.filter(p=>p.rmSlug===sel)).sort((a,b)=>(+b.premium||0)-(+a.premium||0));
     const per=RMS.map(r=>({name:r.name,slug:r.slug,n:all.filter(p=>p.rmSlug===r.slug).length,prem:all.filter(p=>p.rmSlug===r.slug).reduce((s,p)=>s+(+p.premium||0),0)})).filter(r=>r.n>0).sort((a,b)=>b.prem-a.prem);
@@ -1712,11 +1761,38 @@ async function resolveOrg(){
           <td class="mono">${esc(p.lastVisit||'—')}</td>
           <td><span class="hb hb-${p.health}"><span class="dot"></span>${HEALTH[p.health]}</span></td></tr>`;}).join('')}
       </table></div>
+      ${removed.length?`<div class="sec-title" style="margin-top:16px;">🗑 Removed clients (${removed.length})</div>
+      <div class="note">Clients RMs removed from their book — with the reason. Restore puts a client straight back on the RM's Active Clients; Delete permanently erases it (only you can do this, and it cannot be undone).</div>
+      <div class="card" style="padding:6px 0;"><table>
+        <tr><th>Client</th><th>RM</th><th>Premium</th><th>Reason</th><th>Removed</th><th></th></tr>
+        ${removed.map(p=>`<tr><td><b>${esc(p.client)}</b></td><td>${esc(p.rmName)}</td><td class="mono">${zar(p.premium)}</td>
+          <td>${esc(p.archivedReason||'—')}</td><td class="mono">${esc((p.archivedAt||'').slice(0,10)||'—')}</td>
+          <td style="white-space:nowrap;"><button class="link-btn" data-crestore="${p.rmSlug}:${p.id}">Restore</button>
+          &nbsp;<button class="link-btn" data-cdel="${p.rmSlug}:${p.id}" style="color:var(--red);">Delete</button></td></tr>`).join('')}
+      </table></div>`:''}
     </div>`;
   }
   function wireCmdClients(){
     document.querySelectorAll('[data-cbrm]').forEach(b=>b.onclick=()=>{S._cmdBookRM=b.dataset.cbrm;render();});
     wireSearch('cmdcli-search','#tbl-cmdcli tr');
+    document.querySelectorAll('[data-crestore]').forEach(b=>b.onclick=async()=>{
+      const [slug,id]=b.dataset.crestore.split(':');
+      const rec=(S.portfolio[slug]||[]).find(x=>x.id===id);if(!rec)return;
+      rec.archived=false;delete rec.archivedReason;delete rec.archivedAt;
+      await savePortfolio(slug);
+      logChange(slug,`${rec.client} restored to Active Clients by ${viewerName()}`,'update');
+      render();toast(`${rec.client} restored to ${rmName(slug)}'s book`);
+    });
+    document.querySelectorAll('[data-cdel]').forEach(b=>b.onclick=()=>{
+      const [slug,id]=b.dataset.cdel.split(':');
+      const rec=(S.portfolio[slug]||[]).find(x=>x.id===id);if(!rec)return;
+      askConfirm('Delete permanently?',`<b>${esc(rec.client)}</b> (${esc(rmName(slug))}) will be erased completely — including its activity history. This cannot be undone. If in doubt, leave it under Removed.`,'Delete permanently',async()=>{
+        S.portfolio[slug]=(S.portfolio[slug]||[]).filter(x=>x.id!==id);
+        await savePortfolio(slug);
+        logChange(slug,`${rec.client} permanently deleted from the book by ${viewerName()}`,'update');
+        render();toast('Client permanently deleted');
+      });
+    });
   }
 
   // ---- Pipeline Deals: every RM's live pipeline, full detail with premium ----
@@ -2037,7 +2113,7 @@ async function resolveOrg(){
 
   // ---- Portfolio: the whole book of business. No commission. ----
   function mgrBook(){
-    const all=[];RMS.forEach(r=>(S.portfolio[r.slug]||[]).forEach(p=>all.push(Object.assign({rmName:r.name,rmSlug:r.slug},p))));
+    const all=[];RMS.forEach(r=>(S.portfolio[r.slug]||[]).filter(p=>!p.archived).forEach(p=>all.push(Object.assign({rmName:r.name,rmSlug:r.slug},p))));
     const sel=S._bookRM||'all';
     const shown=(sel==='all'?all:all.filter(p=>p.rmSlug===sel)).sort((a,b)=>(+b.premium||0)-(+a.premium||0));
     const per=RMS.map(r=>({name:r.name,slug:r.slug,n:all.filter(p=>p.rmSlug===r.slug).length})).filter(r=>r.n>0).sort((a,b)=>b.n-a.n);
@@ -2383,7 +2459,7 @@ async function resolveOrg(){
   function renderPayModal(){
     if(S.modal.type==='payrow'){
       const slug=S.modal.slug;
-      const book=(S.portfolio[slug]||[]).slice().sort((a,b)=>a.client.localeCompare(b.client));
+      const book=(S.portfolio[slug]||[]).filter(p=>!p.archived).sort((a,b)=>a.client.localeCompare(b.client));
       return `<div class="modal-bd" id="mbd"><div class="modal">
         <div class="modal-h"><div class="modal-t">Add client — ${esc(rmName(slug))}</div><button class="x" id="mx">✕</button></div>
         <div class="field"><label>Client (from ${esc(rmName(slug))}'s portfolio)</label>
