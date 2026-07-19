@@ -867,7 +867,7 @@ async function resolveOrg(){
   // ================= GATE =================
   // Build stamp shown on the sign-in card so support can instantly tell which
   // version a device is running. Bump the date whenever a change is pushed.
-  const APP_VERSION='v2026.07.19b';
+  const APP_VERSION='v2026.07.19c';
   function renderGate(){
     if(!S.gateStep){
       root.innerHTML=`<div class="gate">
@@ -2609,6 +2609,10 @@ async function resolveOrg(){
     };
   }
 })();
+</script>
+<script>
+  /* Installable PWA: fast load + offline shell. Data (Supabase) is never cached. */
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 </script>
 </body>
 </html>
