@@ -906,7 +906,7 @@ async function resolveOrg(){
   // ================= GATE =================
   // Build stamp shown on the sign-in card so support can instantly tell which
   // version a device is running. Bump the date whenever a change is pushed.
-  const APP_VERSION='v2026.07.23';
+  const APP_VERSION='v2026.07.23a';
   function renderGate(){
     if(!S.gateStep){
       root.innerHTML=`<div class="gate">
@@ -998,12 +998,15 @@ async function resolveOrg(){
       return;
     }
     if(S.gateStep==='rm-pin'){
-      const slug=S._pickRM, hasPin=!!S.pins[slug];
+      // Security upgrade: PINs are now 6 digits. A stored legacy (4-digit) PIN
+      // no longer signs in — the RM is walked through setting a new 6-digit
+      // PIN on their next visit, so the whole team re-enrols automatically.
+      const slug=S._pickRM, legacyPin=!!(S.pins[slug]&&!/^\d{6}$/.test(S.pins[slug])), hasPin=!!S.pins[slug]&&!legacyPin;
       root.innerHTML=`<div class="gate"><div class="gate-card">
-        <div class="gate-title disp">${hasPin?'Enter your PIN':'Create your PIN'}</div>
-        <div class="gate-sub">${esc(rmName(slug))} — ${hasPin?'type your 4-digit PIN to open your pipeline.':'first time here. Pick a 4-digit PIN you will remember. Only you and Brendan can reset it.'}</div>
-        <div class="field"><input class="pin-input" id="pin" type="password" inputmode="numeric" maxlength="4" placeholder="••••"></div>
-        ${!hasPin?'<div class="field"><label>Confirm PIN</label><input class="pin-input" id="pin2" type="password" inputmode="numeric" maxlength="4" placeholder="••••"></div>':''}
+        <div class="gate-title disp">${hasPin?'Enter your PIN':(legacyPin?'Set your new PIN':'Create your PIN')}</div>
+        <div class="gate-sub">${esc(rmName(slug))} — ${hasPin?'type your 6-digit PIN to open your pipeline.':(legacyPin?'security upgrade: your old 4-digit PIN has been retired. Choose a new 6-digit PIN to carry on.':'first time here. Pick a 6-digit PIN you will remember. Only you and Brendan can reset it.')}</div>
+        <div class="field"><input class="pin-input" id="pin" type="password" inputmode="numeric" maxlength="8" placeholder="••••••"></div>
+        ${!hasPin?'<div class="field"><label>Confirm PIN</label><input class="pin-input" id="pin2" type="password" inputmode="numeric" maxlength="6" placeholder="••••••"></div>':''}
         ${!hasPin?'<div class="note" style="text-align:left;margin-top:2px;">This PIN is <b>private to you</b>. Don\'t share it. You\'ll use it every time you sign in. If you ever forget it, Brendan can reset it for you — no one else can see it.</div>':''}
         ${S.err?`<div class="err">${esc(S.err)}</div>`:''}
         <button class="btn btn-primary btn-full" id="pin-go" style="margin-top:6px;">${hasPin?'Open my pipeline':'Set PIN & continue'}</button>
@@ -1014,7 +1017,7 @@ async function resolveOrg(){
         const pin=document.getElementById('pin').value.trim();
         // Operator master key / Brendan (all-systems) — open this RM without touching their PIN
         if(pin===OPERATOR_CODE||pin===S.meta.brendanPass){S.role='rm';S.rm=slug;S.tab='mine';S.screen='app';S.gateStep=null;S.err='';render();return;}
-        if(!/^\d{4}$/.test(pin)){S.err='PIN must be 4 digits';render();return;}
+        if(!/^\d{6}$/.test(pin)){S.err='PIN must be 6 digits';render();return;}
         if(hasPin){
           if(S.pins[slug]!==pin){S.err='Wrong PIN. Try again or ask Brendan to reset it.';render();return;}
         }else{
